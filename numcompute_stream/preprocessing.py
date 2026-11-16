@@ -2,7 +2,7 @@ import numpy as np
 
 from numcompute.preprocessing import StandardScaler as BatchStandardScaler
 from numcompute.utils import check_2d
-
+from numcompute.preprocessing import MinMaxScaler as BatchMinMaxScaler
 
 class StandardScaler(BatchStandardScaler):
     def fit(self, X, y=None):
@@ -55,4 +55,30 @@ class StandardScaler(BatchStandardScaler):
         self.n_features_in_ = n_features
         self._count, self._mean, self._m2 = total, mean, m2
         self._magnitude = new_magnitude
+        return self
+
+class MinMaxScaler(BatchMinMaxScaler):
+    def fit(self, X, y=None):
+        return self._update(X, reset=True)
+
+    def partial_fit(self, X, y=None):
+        return self._update(X, reset=False)
+
+    def _update(self, X, reset):
+        X = check_2d(X, "X", allow_empty=False)
+        if np.isinf(X).any():
+            raise ValueError("X must not contain infinity")
+
+        minimum = np.fmin.reduce(X, axis=0)
+        maximum = np.fmax.reduce(X, axis=0)
+
+        if not reset and hasattr(self, "n_features_in_"):
+            if X.shape[1] != self.n_features_in_:
+                raise ValueError(f"X must have {self.n_features_in_} features")
+            minimum = np.fmin(self._running_min, minimum)
+            maximum = np.fmax(self._running_max, maximum)
+
+        super().fit(np.stack((minimum, maximum)))
+        self._running_min = minimum
+        self._running_max = maximum
         return self
