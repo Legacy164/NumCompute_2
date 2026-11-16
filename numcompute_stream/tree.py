@@ -37,7 +37,7 @@ def best_numeric_split(x,y,impurity=gini):
     return best
 
 class DecisionTreeClassifier:
-    def __init__(self, max_depth=None, min_samples_split=2, impurity=gini, buffer_size=500):
+    def __init__(self, max_depth=None, min_samples_split=2, impurity=gini, buffer_size=500, max_features=None, random_state=None):
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.impurity = impurity
@@ -48,6 +48,14 @@ class DecisionTreeClassifier:
         self.buffer_size = buffer_size
         self._chunks = []
         self._buffered_rows = 0
+        if max_features is not None and (
+            isinstance(max_features, bool)
+            or not isinstance(max_features, (int, np.integer))
+            or max_features < 1):
+            raise ValueError("max_features must be None or a positive integer")
+
+        self.max_features = max_features
+        self.random_state = random_state
 
     def fit(self, X, y):
         X = np.asarray(X, dtype=float)
@@ -59,7 +67,7 @@ class DecisionTreeClassifier:
             raise ValueError("y must be 1-D with one label per row of X")
         if not np.isfinite(X).all():
             raise ValueError("X must contain only finite values")
-
+        self._rng = np.random.default_rng(self.random_state)
         self.root_ = self._build(X, y, depth=0)
         self.n_features_in_ = X.shape[1]
         self._chunks.clear()
@@ -107,7 +115,11 @@ class DecisionTreeClassifier:
             return leaf
 
         best_feature, best_threshold, best_score = None, None, None
-        for feature in range(X.shape[1]):
+        feature_indices = range(X.shape[1])
+        if self.max_features is not None and self.max_features < X.shape[1]:
+            feature_indices = np.sort(
+                self._rng.choice(X.shape[1], size=self.max_features, replace=False))
+        for feature in feature_indices:
             result = best_numeric_split(X[:, feature], y, self.impurity)
             if result is None:
                 continue

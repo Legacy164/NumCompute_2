@@ -53,8 +53,21 @@ def test_partial_fit_retrains_when_buffer_reaches_limit():
     tree.partial_fit([[0], [1]], [0, 0])
     assert tree.predict([[0], [5]]).tolist() == [1, 0]
 
+def test_max_features_limits_split_search():
+    X = [[0, 0], [1, 0], [4, 0], [5, 0]]
+    y = [0, 0, 1, 1]
+
+    full_tree = DecisionTreeClassifier(max_depth=1).fit(X, y)
+    limited_tree = DecisionTreeClassifier(
+        max_depth=1, max_features=1, random_state=0
+    ).fit(X, y)
+
+    assert full_tree.root_["feature"] == 0
+    assert limited_tree.root_["leaf"]
+
 if __name__ == "__main__":
     test_gini_and_entropy()
     test_best_numeric_split()
     test_decision_tree()
-    print("All tests passed")
+    test_partial_fit_retrains_when_buffer_reaches_limit()
+    test_max_features_limits_split_search()
