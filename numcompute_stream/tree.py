@@ -37,11 +37,17 @@ def best_numeric_split(x,y,impurity=gini):
     return best
 
 class DecisionTreeClassifier:
-    def __init__(self, max_depth=None, min_samples_split=2, impurity=gini):
+    def __init__(self, max_depth=None, min_samples_split=2, impurity=gini, buffer_size=500):
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.impurity = impurity
         self.root_ = None
+        if isinstance(buffer_size, bool) or not isinstance(buffer_size, (int, np.integer)) or buffer_size < 1:
+            raise ValueError("buffer_size must be a positive integer")
+
+        self.buffer_size = buffer_size
+        self._chunks = []
+        self._buffered_rows = 0
 
     def fit(self, X, y):
         X = np.asarray(X, dtype=float)
@@ -56,6 +62,36 @@ class DecisionTreeClassifier:
 
         self.root_ = self._build(X, y, depth=0)
         self.n_features_in_ = X.shape[1]
+        self._chunks.clear()
+        self._buffered_rows = 0
+        return self
+
+    def partial_fit(self, X, y):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y)
+
+        if X.ndim != 2 or X.shape[1] == 0:
+            raise ValueError("X must be 2-D with at least one feature")
+        if y.ndim != 1 or len(y) != len(X):
+            raise ValueError("y must be 1-D with one label per row of X")
+        if not np.isfinite(X).all():
+            raise ValueError("X must contain only finite values")
+        if len(X) == 0:
+            return self
+
+        expected_features = getattr(self, "n_features_in_", X.shape[1])
+        if self._chunks:
+            expected_features = self._chunks[0][0].shape[1]
+        if X.shape[1] != expected_features:
+            raise ValueError(f"X must have {expected_features} features")
+
+        self._chunks.append((X.copy(), y.copy()))
+        self._buffered_rows += len(X)
+
+        if self._buffered_rows >= self.buffer_size:
+            features, labels = zip(*self._chunks)
+            self.fit(np.concatenate(features), np.concatenate(labels))
+
         return self
 
     def _build(self, X, y, depth):

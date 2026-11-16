@@ -40,6 +40,19 @@ def test_decision_tree():
     assert tree.root_["leaf"]
     assert list(tree.predict([[3], [10]])) == [0, 0]
 
+def test_partial_fit_retrains_when_buffer_reaches_limit():
+    tree = DecisionTreeClassifier(max_depth=1, buffer_size=4)
+    tree.fit([[0], [1], [4], [5]], [0, 0, 1, 1])
+
+    tree.partial_fit([[0], [1]], [1, 1])
+    assert tree.predict([[0], [5]]).tolist() == [0, 1]
+
+    tree.partial_fit([[4], [5], [6]], [0, 0, 0])
+    assert tree.predict([[0], [5]]).tolist() == [1, 0]
+
+    tree.partial_fit([[0], [1]], [0, 0])
+    assert tree.predict([[0], [5]]).tolist() == [1, 0]
+
 if __name__ == "__main__":
     test_gini_and_entropy()
     test_best_numeric_split()
