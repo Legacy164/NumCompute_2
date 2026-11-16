@@ -23,7 +23,9 @@ def best_numeric_split(x,y,impurity=gini):
     if len(values)<2:
         return None
 
-    thresholds=(values[:-1]+values[1:])/2
+    lower, upper = values[:-1], values[1:]
+    thresholds = lower / 2.0 + upper / 2.0
+    thresholds = np.where((thresholds < lower) | (thresholds >= upper), lower, thresholds)
     n=len(y)
     best=None
     for t in thresholds:
@@ -42,9 +44,18 @@ class DecisionTreeClassifier:
         self.root_ = None
 
     def fit(self, X, y):
-        X = np.asarray(X)
+        X = np.asarray(X, dtype=float)
         y = np.asarray(y)
+
+        if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
+            raise ValueError("X must be a nonempty 2-D array")
+        if y.ndim != 1 or len(y) != len(X):
+            raise ValueError("y must be 1-D with one label per row of X")
+        if not np.isfinite(X).all():
+            raise ValueError("X must contain only finite values")
+
         self.root_ = self._build(X, y, depth=0)
+        self.n_features_in_ = X.shape[1]
         return self
 
     def _build(self, X, y, depth):
@@ -81,7 +92,14 @@ class DecisionTreeClassifier:
         }
 
     def predict(self, X):
-        X = np.asarray(X)
+        if self.root_ is None:
+            raise ValueError("Call fit before predict")
+
+        X = np.asarray(X, dtype=float)
+        if X.ndim != 2 or X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X must be 2-D with {self.n_features_in_} features")
+        if not np.isfinite(X).all():
+            raise ValueError("X must contain only finite values")
         predictions = []
         for row in X:
             node = self.root_
