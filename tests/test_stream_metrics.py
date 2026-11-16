@@ -1,7 +1,6 @@
 import numpy as np
 
-from numcompute_stream.metrics import StreamingMetrics
-
+from numcompute_stream.metrics import StreamingMetrics, StreamingAUC
 
 def test_metrics_accumulate_across_chunks():
     metrics = StreamingMetrics()
@@ -31,3 +30,22 @@ def test_reset_clears_metrics():
     metrics.update([0], [0])
 
     np.testing.assert_array_equal(metrics.result()["confusion_matrix"], [[1, 0], [0, 0]])
+
+def test_auc_compares_scores_across_chunks():
+    metric = StreamingAUC().update([0, 0], [0.1, 0.4])
+    assert np.isnan(metric.result())
+
+    metric.update([1, 1], [0.35, 0.8])
+    assert metric.result() == 0.75
+
+
+def test_rolling_auc_discards_old_scores():
+    metric = StreamingAUC(window_size=2)
+    metric.update([1, 0], [0.1, 0.9])
+    assert metric.result() == 0.0
+
+    metric.update([0, 1], [0.2, 0.8])
+    assert metric.result() == 1.0
+
+    metric.reset()
+    assert np.isnan(metric.result())

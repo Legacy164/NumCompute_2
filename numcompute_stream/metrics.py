@@ -1,6 +1,6 @@
 import numpy as np
 
-from numcompute.metrics import confusion_matrix
+from numcompute.metrics import confusion_matrix, roc_auc_score
 
 
 class StreamingMetrics:
@@ -70,3 +70,54 @@ class StreamingMetrics:
             out=np.zeros(numerator.shape, dtype=float),
             where=denominator != 0,
         )
+
+class StreamingAUC:
+    """Track binary ROC AUC across all rows or the latest window_size rows."""
+
+    def __init__(self, pos_label=1, window_size=None):
+        if window_size is not None and (
+            isinstance(window_size, bool)
+            or not isinstance(window_size, (int, np.integer))
+            or window_size < 1
+        ):
+            raise ValueError("window_size must be a positive integer")
+
+        self.pos_label = pos_label
+        self.window_size = window_size
+        self.reset()
+
+    def reset(self):
+        self._chunks = []
+
+    def update(self, y_true, y_score):
+        y_true = np.asarray(y_true)
+        y_score = np.asarray(y_score, dtype=float)
+        if y_true.ndim != 1 or y_true.shape != y_score.shape:
+            raise ValueError("y_true and y_score must be matching 1-D arrays")
+        if not np.isfinite(y_score).all():
+            raise ValueError("y_score must contain only finite values")
+        if y_true.size == 0:
+            return self
+
+        positive = y_true == self.pos_label
+        if self.window_size is None:
+            self._chunks.append((positive, y_score.copy()))
+        else:
+            n = self.window_size
+            if self._chunks:
+                old_positive, old_score = self._chunks[0]
+                positive = np.concatenate((old_positive, positive[-n:]))
+                y_score = np.concatenate((old_score, y_score[-n:]))
+            self._chunks = [(positive[-n:].copy(), y_score[-n:].copy())]
+        return self
+
+    def result(self):
+        if not self._chunks:
+            return float("nan")
+
+        labels, scores = zip(*self._chunks)
+        positive = np.concatenate(labels)
+        if positive.all() or not positive.any():
+            return float("nan")
+
+        return roc_auc_score(positive.astype(int), np.concatenate(scores))
