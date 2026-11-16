@@ -3,7 +3,7 @@ import numpy as np
 from numcompute.preprocessing import StandardScaler as BatchStandardScaler
 from numcompute.utils import check_2d
 from numcompute.preprocessing import MinMaxScaler as BatchMinMaxScaler
-
+from numcompute.preprocessing import Imputer as BatchImputer
 class StandardScaler(BatchStandardScaler):
     def fit(self, X, y=None):
         return self._update(X, reset=True)
@@ -81,4 +81,40 @@ class MinMaxScaler(BatchMinMaxScaler):
         super().fit(np.stack((minimum, maximum)))
         self._running_min = minimum
         self._running_max = maximum
+        return self
+    
+class Imputer(BatchImputer):
+    def fit(self, X, y=None):
+        return self._update(X, reset=True)
+
+    def partial_fit(self, X, y=None):
+        return self._update(X, reset=False)
+
+    def _update(self, X, reset):
+        X = check_2d(X, "X", allow_empty=False)
+        if not reset and hasattr(self, "n_features_in_"):
+            if X.shape[1] != self.n_features_in_:
+                raise ValueError(f"X must have {self.n_features_in_} features")
+
+        if self.strategy == "constant":
+            return super().fit(X)
+        if self.strategy != "mean":
+            raise ValueError("Streaming imputation supports 'mean' and 'constant'")
+
+        valid = ~(self._mask(X) | np.isnan(X))
+        count = valid.sum(axis=0)
+        total = np.where(valid, X, 0.0).sum(axis=0)
+
+        if not reset and hasattr(self, "_count"):
+            count += self._count
+            total += self._total
+
+        self.statistics_ = np.divide(
+            total,
+            count,
+            out=np.full(X.shape[1], float(self.fill_value)),
+            where=count > 0,
+        )
+        self._count, self._total = count, total
+        self.n_features_in_ = X.shape[1]
         return self
