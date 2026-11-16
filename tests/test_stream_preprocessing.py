@@ -1,6 +1,6 @@
 import numpy as np
 
-from numcompute_stream.preprocessing import StandardScaler, MinMaxScaler, Imputer
+from numcompute_stream.preprocessing import StandardScaler, MinMaxScaler, Imputer, OneHotEncoder
 
 
 def test_partial_fit_scales_tiny_values_and_ignores_nan():
@@ -29,4 +29,14 @@ def test_imputer_partial_fit_weights_each_observation():
     np.testing.assert_allclose(
         imputer.transform([[np.nan, np.nan]]),
         [[5.0, 10.0]],
+    )
+
+def test_one_hot_partial_fit_adds_new_categories():
+    encoder = OneHotEncoder().partial_fit(["blue", "red"])
+    encoder.partial_fit(["amber", "blue"])
+
+    assert encoder.get_feature_names_out() == ["x0_amber", "x0_blue", "x0_red"]
+    np.testing.assert_array_equal(
+        encoder.transform(["red", "amber"]),
+        [[0, 0, 1], [1, 0, 0]],
     )

@@ -4,6 +4,8 @@ from numcompute.preprocessing import StandardScaler as BatchStandardScaler
 from numcompute.utils import check_2d
 from numcompute.preprocessing import MinMaxScaler as BatchMinMaxScaler
 from numcompute.preprocessing import Imputer as BatchImputer
+from numcompute.preprocessing import OneHotEncoder as BatchOneHotEncoder
+
 class StandardScaler(BatchStandardScaler):
     def fit(self, X, y=None):
         return self._update(X, reset=True)
@@ -117,4 +119,20 @@ class Imputer(BatchImputer):
         )
         self._count, self._total = count, total
         self.n_features_in_ = X.shape[1]
+        return self
+
+class OneHotEncoder(BatchOneHotEncoder):
+    def partial_fit(self, X, y=None):
+        if not hasattr(self, "categories_"):
+            return self.fit(X, y)
+
+        X = self._as_2d(X)
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X must have {self.n_features_in_} features")
+
+        self.categories_ = [
+            np.union1d(categories, X[:, column])
+            for column, categories in enumerate(self.categories_)
+        ]
+        self.n_output_features_ = sum(len(c) for c in self.categories_)
         return self
