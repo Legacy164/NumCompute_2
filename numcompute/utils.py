@@ -614,6 +614,7 @@ def pairwise_distances(X, Y=None, metric: str = "euclidean") -> np.ndarray:
     """
     if metric not in _METRICS:
         raise ValueError(f"metric must be one of {_METRICS}, got {metric!r}")
+
     A = check_2d(X, "X")
     B = A if Y is None else check_2d(Y, "Y")
     if A.shape[1] != B.shape[1]:
@@ -622,11 +623,19 @@ def pairwise_distances(X, Y=None, metric: str = "euclidean") -> np.ndarray:
             f"{A.shape[1]} and {B.shape[1]}"
         )
     if metric in ("euclidean", "sqeuclidean"):
-        sq = (A * A).sum(1)[:, None] + (B * B).sum(1)[None, :] - 2.0 * (A @ B.T)
-        np.maximum(sq, 0.0, out=sq)
+        distances = np.empty((len(A), len(B)))
+
+        for i, point in enumerate(A):
+            delta = point - B
+            if metric == "euclidean":
+                distances[i] = np.hypot.reduce(delta, axis=1, initial=0.0)
+            else:
+                distances[i] = np.sum(delta ** 2, axis=1)
+
         if Y is None:
-            np.fill_diagonal(sq, 0.0)
-        return np.sqrt(sq) if metric == "euclidean" else sq
+            np.fill_diagonal(distances, 0.0)
+
+        return distances
     if metric == "manhattan":
         return np.abs(A[:, None, :] - B[None, :, :]).sum(axis=2)
     if metric == "chebyshev":

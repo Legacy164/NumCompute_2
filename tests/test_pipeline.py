@@ -228,3 +228,18 @@ def test_nearest_centroid_errors():
 
 def test_baseestimator_is_importable():
     assert issubclass(Transformer, BaseEstimator)
+
+@pytest.mark.parametrize("container", [Pipeline, FeatureUnion])
+def test_minimal_transformer_can_fit_in_place(container):
+    class Center:
+        def fit(self, X):
+            self.mean = np.asarray(X).mean(axis=0)
+
+        def transform(self, X):
+            return np.asarray(X) - self.mean
+
+    model = container([("center", Center())])
+    X = [[1.0], [3.0]]
+
+    np.testing.assert_allclose(model.fit_transform(X, [0, 1]), [[-1.0], [1.0]])
+    np.testing.assert_allclose(model.fit(X, [0, 1]).transform(X), [[-1.0], [1.0]])

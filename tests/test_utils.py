@@ -245,3 +245,9 @@ def test_to_2d_and_back_round_trip():
     assert np.array_equal(from_2d_along_axis(a2, shape, 1), a)
     with pytest.raises(ValueError):
         to_2d_along_axis(np.float64(3), 0)
+
+@pytest.mark.parametrize("metric, expected",[("euclidean", 2.0), ("sqeuclidean", 4.0)],
+)
+def test_distance_preserves_small_difference_at_large_offset(metric, expected):
+    result = pairwise_distances([[1e8, 1e8]], [[1e8 + 2, 1e8]], metric=metric)
+    assert result[0, 0] == expected

@@ -61,18 +61,33 @@ def _finite_differences(func, x, h, method, vectorized, relative) -> np.ndarray:
         raise ValueError(f"method must be one of {_METHODS}, got {method!r}")
     x = _check_point(x)
     hv = _step_vector(h, x, relative)
-    H = np.diag(hv)
-    if method == "central":
-        fp = _evaluate(func, x + H, vectorized)
-        fm = _evaluate(func, x - H, vectorized)
-        num, denom = fp - fm, 2.0 * hv
-    else:
-        f0 = _evaluate(func, x[None, :], vectorized)[0]
-        if method == "forward":
-            num, denom = _evaluate(func, x + H, vectorized) - f0, hv
-        else:
-            num, denom = f0 - _evaluate(func, x - H, vectorized), hv
-    return num / denom.reshape((-1,) + (1,) * (num.ndim - 1))
+    baseline = None
+    if method != "central":
+        baseline = _evaluate(func, x[None, :], vectorized)[0]
+
+    blocks = []
+    batch_size = 64
+
+    for start in range(0, x.size, batch_size):
+        stop = min(start + batch_size, x.size)
+        steps = hv[start:stop]
+
+        offsets = np.zeros((stop - start, x.size))
+        offsets[np.arange(stop - start), np.arange(start, stop)] = steps
+
+        upper = baseline
+        lower = baseline
+        if method != "backward":
+            upper = _evaluate(func, x + offsets, vectorized)
+        if method != "forward":
+            lower = _evaluate(func, x - offsets, vectorized)
+
+        difference = upper - lower
+        denominator = 2.0 * steps if method == "central" else steps
+        shape = (-1,) + (1,) * (difference.ndim - 1)
+        blocks.append(difference / denominator.reshape(shape))
+
+    return np.concatenate(blocks, axis=0)
 
 
 def grad(

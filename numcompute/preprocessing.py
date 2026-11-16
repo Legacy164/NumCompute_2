@@ -5,12 +5,10 @@ Scalers and the imputer ignore NaN when learning statistics and keep NaN in
 their output where the input had it (the imputer fills it).
 """
 from __future__ import annotations
-
 import warnings
 from typing import List, Optional, Sequence, Tuple
-
 import numpy as np
-
+from numbers import Real
 from .pipeline import Transformer
 from .utils import check_2d, check_is_fitted
 
@@ -96,11 +94,17 @@ class StandardScaler(Transformer):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             mean = np.nanmean(X, axis=0)
-            var = np.nanvar(X, axis=0)
-        mean = np.where(np.isnan(mean), 0.0, mean)
-        var = np.where(np.isnan(var), 0.0, var)
-        scale = np.sqrt(var)
-        scale = np.where(scale <= 10 * _EPS * np.maximum(1.0, np.abs(mean)), 1.0, scale)
+            minimum = np.nanmin(X, axis=0)
+            maximum = np.nanmax(X, axis=0)
+            mean = np.where(minimum == maximum, minimum, mean)
+            mean = np.where(np.isnan(mean), 0.0, mean)
+            centered = X - mean
+            magnitude = np.max(np.where(np.isnan(centered), 0.0, np.abs(centered)), axis=0)
+            normalized = centered / np.where(magnitude == 0.0, 1.0, magnitude)
+            scale = magnitude * np.sqrt(np.nanvar(normalized, axis=0))
+        scale = np.where(magnitude == 0.0, 0.0, scale)
+        var = scale ** 2
+        scale = np.where(scale == 0.0, 1.0, scale)
         self.mean_, self.var_, self.scale_ = mean, var, scale
         self.n_features_in_ = X.shape[1]
         return self
@@ -210,11 +214,14 @@ class MinMaxScaler(Transformer):
         """
         try:
             low, high = self.feature_range
+            if not all(isinstance(bound, Real) for bound in (low, high)):
+                raise TypeError("range endpoints must be real numbers")
             low, high = float(low), float(high)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("feature_range must be a (low, high) pair of numbers") from exc
-        if not low < high:
-            raise ValueError(f"feature_range must satisfy low < high, got {self.feature_range}")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("feature_range must be a pair of real numbers") from exc
+        width = high - low
+        if not np.isfinite(width) or width <= 0:
+            raise ValueError("feature_range must be increasing with finite width")
         X = _check_fit_data(X)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -224,7 +231,7 @@ class MinMaxScaler(Transformer):
         drange = dmax - dmin
         drange = np.where(drange == 0.0, 1.0, drange)
         self.data_min_, self.data_max_, self.data_range_ = dmin, dmax, drange
-        self.scale_ = (high - low) / drange
+        self.scale_ = width / drange
         self.min_ = low - dmin * self.scale_
         self.n_features_in_ = X.shape[1]
         return self

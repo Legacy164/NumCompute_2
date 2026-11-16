@@ -156,3 +156,14 @@ def test_line_search_errors():
     with pytest.raises(RuntimeError):
         # a constant function can never show the required decrease
         backtracking_line_search(lambda v: 0.0, [1.0], [-1.0], grad_x=[1.0], max_iter=3)
+
+@pytest.mark.parametrize("method", ["central", "forward", "backward"])
+def test_finite_differences_limit_batch_size(method):
+    x = np.ones(129)
+
+    def quadratic(points):
+        assert len(points) <= 64
+        return np.sum(points ** 2, axis=1)
+
+    result = grad(quadratic, x, method=method, vectorized=True)
+    np.testing.assert_allclose(result, 2 * x, rtol=0, atol=2e-5)

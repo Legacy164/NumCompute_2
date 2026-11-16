@@ -120,7 +120,8 @@ class Transformer(BaseEstimator):
         -----
         Cost is that of ``fit`` plus ``transform``.
         """
-        return self.fit(X, y).transform(X)
+        _call_fit(self.fit, X, y)
+        return self.transform(X)
 
 
 class Estimator(BaseEstimator):
@@ -254,6 +255,29 @@ class ColumnSelector(Transformer):
 def _is_transformer(obj) -> bool:
     return hasattr(obj, "fit") and hasattr(obj, "transform")
 
+def _call_fit(method, X, y):
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return method(X, y)
+
+    try:
+        signature.bind(X, y)
+    except TypeError:
+        if "y" in signature.parameters:
+            return method(X, y=y)
+        return method(X)
+
+    return method(X, y)
+
+def _fit_then_transform(step, X, y):
+    combined = getattr(step, "fit_transform", None)
+    if callable(combined):
+        return _call_fit(combined, X, y)
+
+    _call_fit(step.fit, X, y)
+    return step.transform(X)
+
 
 class Pipeline(BaseEstimator):
     """Chain transformers, optionally ending in an estimator.
@@ -323,7 +347,7 @@ class Pipeline(BaseEstimator):
     def _fit_intermediate(self, X, y):
         Xt = X
         for _, step in self.steps[:-1]:
-            Xt = step.fit_transform(Xt, y) if hasattr(step, "fit_transform") else step.fit(Xt, y).transform(Xt)
+            Xt = _fit_then_transform(step, Xt, y)
         return Xt
 
     def fit(self, X, y=None) -> "Pipeline":
@@ -342,7 +366,7 @@ class Pipeline(BaseEstimator):
             ``self``.
         """
         Xt = self._fit_intermediate(X, y)
-        self.steps[-1][1].fit(Xt, y)
+        _call_fit(self.steps[-1][1].fit, Xt, y)
         return self
 
     def fit_transform(self, X, y=None):
@@ -356,10 +380,10 @@ class Pipeline(BaseEstimator):
         Xt = self._fit_intermediate(X, y)
         last = self.steps[-1][1]
         if hasattr(last, "fit_transform"):
-            return last.fit_transform(Xt, y)
+            return _call_fit(last.fit_transform, Xt, y)
         if not hasattr(last, "transform"):
             raise TypeError("final step has no transform; use fit/predict instead")
-        return last.fit(Xt, y).transform(Xt)
+        return _fit_then_transform(last, Xt, y)
 
     def transform(self, X):
         """Apply ``transform`` of every step.
@@ -485,7 +509,7 @@ class FeatureUnion(Transformer):
     def fit(self, X, y=None) -> "FeatureUnion":
         """Fit every transformer on ``X``. Returns ``self``."""
         for _, t in self.transformer_list:
-            t.fit(X, y)
+            _call_fit(t.fit, X, y)
         self.fitted_ = True
         return self
 
@@ -513,12 +537,7 @@ class FeatureUnion(Transformer):
 
     def fit_transform(self, X, y=None):
         """Fit and transform in one pass."""
-        blocks = []
-        for _, t in self.transformer_list:
-            if hasattr(t, "fit_transform"):
-                blocks.append(np.asarray(t.fit_transform(X, y)))
-            else:
-                blocks.append(np.asarray(t.fit(X, y).transform(X)))
+        blocks = [np.asarray(_fit_then_transform(t, X, y)) for _, t in self.transformer_list]
         self.fitted_ = True
         return self._stack(blocks)
 

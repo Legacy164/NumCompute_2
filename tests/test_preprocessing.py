@@ -216,3 +216,18 @@ def test_one_hot_errors():
         OneHotEncoder().fit([["a"]]).get_feature_names_out(["x", "y"])
     with pytest.raises(ValueError):
         OneHotEncoder().fit([["a"], ["b"]]).inverse_transform(np.ones((1, 5)))
+
+@pytest.mark.parametrize("unit", [1e-18, 1e-200])
+def test_standard_scaler_scales_tiny_nonconstant_features(unit):
+    X = np.array([[unit], [3 * unit]])
+
+    scaled = StandardScaler().fit_transform(X)
+
+    np.testing.assert_allclose(scaled, [[-1.0], [1.0]])
+
+@pytest.mark.parametrize(
+    "limits", [(0, np.inf), (np.nan, 1), (1, 1), (-1e308, 1e308), ("0", "1")]
+)
+def test_minmax_rejects_invalid_feature_range(limits):
+    with pytest.raises(ValueError, match="feature_range"):
+        MinMaxScaler(feature_range=limits).fit([[0.0], [1.0]])
