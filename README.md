@@ -1,7 +1,7 @@
 # NumCompute
 
 > **A modular scientific computing toolkit in Plain Python and NumPy only.**  
-> Built for *Programming for AI (Assignment 2.1)* at the Adelaide University.
+> Built for *Programming for AI (Assignment 2.2)* at the Adelaide University.
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![NumPy](https://img.shields.io/badge/numpy-pure%20numpy-orange.svg)](https://numpy.org/)
@@ -9,6 +9,23 @@
 [![Code Style](https://img.shields.io/badge/code%20style-pep8-blue.svg)]()
 
 ---
+
+## Assignment 2.2 — NumCompute-Stream
+
+The `numcompute_stream/` package extends the Assignment 2.1 group project
+with buffered decision-tree training, incremental preprocessing,
+streaming metrics, and visualisations.
+
+From the repository root on `assignment-2.2`, run:
+
+```powershell
+python -m pip install -e ".[dev]" matplotlib ipykernel
+python -m pytest tests -q
+python -m benchmark.run_stream_benchmarks
+```
+
+Open [demo/stream_demo.ipynb](demo/stream_demo.ipynb) in VS Code, select
+the Python environment used above, and run all cells.
 
 ## 1. Project Overview & Philosophy
 
