@@ -17,7 +17,7 @@ The framework uses plain Python, NumPy and matplotlib. It does not depend on pan
 1. **Buffered Retraining**: `partial_fit()` adds each chunk to a buffer. Once at least `buffer_size` rows have arrived, the tree is rebuilt on the buffered rows and the buffer is cleared. Between retrains, `predict()` uses the most recently trained tree.
 2. **Incremental Preprocessing**: Scalers, the imputer and the one-hot encoder extend their learned state with `partial_fit()`. The streaming pipeline updates preprocessing and the tree together, so the active tree always matches its feature transformation.
 3. **Streaming Evaluation**: Each chunk is scored before it is used for training (test-then-train). Metrics can be cumulative or rolling, and the confusion matrix and ROC AUC accumulate over time.
-4. **Vectorised Split Search**: Gini and entropy split scores are computed from NumPy cumulative class counts, and prediction routes rows together at each node.
+4. **Vectorised Split Search**: Gini and entropy split scores for every threshold are computed at once from NumPy cumulative class counts, and prediction routes rows together at each node. The split search is up to **683x faster** than the equivalent Python loop.
 5. **Numerical Stability**: NaN-aware statistics, fixed histogram edges across chunks, deterministic tie handling, safe handling of zero-variance chunks and tiny-scale inputs.
 6. **Built-in Visualisation**: Three reusable plotting functions for metrics over time, model comparison and predictions versus ground truth.
 
@@ -52,7 +52,7 @@ NumCompute_2/
 │   ├── pipeline.py                 # Synchronised preprocessing and buffered tree updates
 │   ├── stream.py                   # StreamTrainer: chunk training, evaluation and logging
 │   └── visualise.py                # Three reusable plotting functions
-├── tests/                          # Inherited tests plus streaming extension tests (339 total)
+├── tests/                          # Inherited tests plus streaming extension tests (345 total)
 │   ├── test_tree.py
 │   ├── test_stream_preprocessing.py
 │   ├── test_stream_stats.py
@@ -114,7 +114,7 @@ python -m pytest tests -q
 Expected output:
 
 ```text
-339 passed
+345 passed
 ```
 
 ---
@@ -149,7 +149,7 @@ for chunk in iter_csv_chunks(
     print(trainer.fit_chunk(X, y))
 ```
 
-`fit_chunk()` evaluates a chunk before training on it. Accuracy is `None` during warm-up, before a tree is available. Later log entries contain chunk accuracy, cumulative accuracy, row counts and array-memory measurements.
+`fit_chunk()` evaluates a chunk before training on it. Accuracy is `None` during warm-up, before a tree is available. Later log entries contain chunk accuracy, macro precision, recall and F1, cumulative accuracy, row counts and array-memory measurements. `StreamTrainer` also accepts a `DecisionTreeClassifier` on its own, without a pipeline.
 
 ### 4.2 Buffered Decision Tree (`numcompute_stream.tree`)
 
@@ -243,24 +243,25 @@ Each function returns a matplotlib figure and accepts optional `save_path` and `
 
 | Module | Primary Classes & Functions | Behaviour & Algorithmic Notes |
 | :--- | :--- | :--- |
-| **`numcompute_stream.tree`** | `DecisionTreeClassifier`, `gini`, `entropy`, `best_numeric_split` | `fit()` builds a tree from scratch and clears the buffer. `partial_fit()` copies each chunk into the buffer and rebuilds the tree once at least `buffer_size` rows have arrived. Gini and entropy split scores use NumPy cumulative class counts. |
+| **`numcompute_stream.tree`** | `DecisionTreeClassifier`, `gini`, `entropy`, `best_numeric_split` | `fit()` builds a tree from scratch and clears the buffer. `partial_fit()` copies each chunk into the buffer and rebuilds the tree once at least `buffer_size` rows have arrived. Gini and entropy split scores for all thresholds come from NumPy cumulative class counts. |
 | **`numcompute_stream.preprocessing`** | `StandardScaler`, `MinMaxScaler`, `Imputer`, `OneHotEncoder` | `fit()` resets learned state; `partial_fit()` extends it. Streaming imputation supports mean and constant strategies. The encoder adds categories incrementally. |
 | **`numcompute_stream.stats`** | `StreamStats` | `update_stats(X_chunk)`, `mean`, `var()`, `quantile(q)` and `histogram()`. Histogram edges stay fixed across chunks, and statistics omit NaNs. |
 | **`numcompute_stream.metrics`** | `StreamingMetrics`, `StreamingAUC` | `update()`, `result()` and `reset()`. Accuracy, per-class precision, recall, F1 and confusion matrix; cumulative by default, rolling with `window_size`. |
-| **`numcompute_stream.pipeline`** | `Pipeline` | Buffers raw chunks and updates preprocessing and the tree together at retraining boundaries. |
-| **`numcompute_stream.stream`** | `StreamTrainer` | `fit_chunk()` and `score_chunk()`. Scores each chunk before training and logs per-chunk accuracy, cumulative accuracy and memory. |
+| **`numcompute_stream.pipeline`** | `Pipeline` | Buffers raw chunks and updates preprocessing and the tree together at retraining boundaries. Rejects chunks whose feature count changes. |
+| **`numcompute_stream.stream`** | `StreamTrainer` | `fit_chunk()` and `score_chunk()`. Works with a pipeline or a bare tree. Scores each chunk before training and logs per-chunk accuracy, macro precision, recall and F1, cumulative accuracy and memory. `score_chunk()` returns accuracy without training. |
 | **`numcompute_stream.visualise`** | `plot_metric_over_time`, `compare_models`, `plot_predictions_vs_ground_truth` | Reusable matplotlib figures with optional saving or inline display. |
 
 ### 5.1 Buffered Tree
 
 - `fit(X, y)` builds a tree from scratch and clears pending buffered data.
 - `partial_fit(X, y)` copies each chunk into the buffer. Once at least `buffer_size` rows have arrived, it rebuilds the tree on all buffered rows and clears the buffer.
-- Between retrains, `predict(X)` uses the most recently trained tree. Prediction before the first training raises an error.
+- Between retrains, `predict(X)` uses the most recently trained tree. Prediction before the first training raises `NotFittedError`.
 - `max_depth` accepts `None` or a nonnegative integer; zero produces a leaf. `min_samples_split` must be an integer of at least two.
 - `buffer_size` and optional `max_features` must be positive integers. `max_features=None` uses all features; `random_state` controls feature subsampling.
+- A parameter of the wrong type raises `TypeError` (for example `buffer_size=1.5`); a value out of range raises `ValueError` (for example `max_depth=-1`).
 - Pass `impurity=gini` or `impurity=entropy`, using the functions from `numcompute_stream.tree`, without quotation marks. Custom impurity callables are also supported.
 
-Gini and entropy split scores use NumPy cumulative class counts. Prediction routes rows together at each node. Loops remain for tree structure, feature search and custom impurity functions. Equal computed split scores select the lowest candidate threshold. Majority-label ties follow NumPy's sorted label order.
+For Gini and entropy, each feature is sorted once and a cumulative sum of one-hot labels gives the left child's class counts for every threshold, so all candidate scores come from one array expression. A custom impurity function uses a Python loop over thresholds instead, which also serves as the benchmark reference. Prediction routes arrays of row indices down the tree, so Python work grows with the number of nodes rather than rows. Loops remain over nodes and candidate features. Equal computed split scores select the lowest candidate threshold, a split must improve impurity by more than a 1e-12 rounding tolerance, and majority-label ties follow NumPy's sorted label order.
 
 ### 5.2 Preprocessing & Pipeline
 
@@ -268,7 +269,7 @@ Gini and entropy split scores use NumPy cumulative class counts. Prediction rout
 
 `OneHotEncoder.partial_fit()` adds categories incrementally. Adding a sorted category can change the encoded column order and output width.
 
-The streaming pipeline buffers raw chunks and updates preprocessing and the tree together at retraining boundaries. This keeps the active tree consistent with its feature transformation. Its final step is a buffered decision tree; preceding steps must support `partial_fit` and `transform`.
+The streaming pipeline buffers raw chunks and updates preprocessing and the tree together at retraining boundaries. This keeps the active tree consistent with its feature transformation. Its final step is a buffered decision tree; preceding steps need `transform` and either `partial_fit` or `fit`. A chunk with a different number of features from earlier chunks raises `ValueError`, including straight after a retrain.
 
 ### 5.3 Statistics & Metrics
 
@@ -290,35 +291,48 @@ python -m benchmark.run_stream_benchmarks
 
 ### Benchmark Method
 
-- **Loop vs NumPy**: accumulates binary confusion matrices across 100 chunks of 1,000 rows. Both implementations must give equal results before the best of three timing runs is reported.
-- **Buffer size**: uses the synthetic CSV, the same imputer and a tree with `max_depth=3`. Both configurations are evaluated on the same 140 rows, starting with the third chunk, and predictions precede training on each evaluated chunk.
-- **Environment**: latest reported results on Windows with Python 3.14.0.
+- **Loop vs vectorised**: every comparison first checks that both versions give the same result, then reports the best of three runs. The loop split search is the same `best_numeric_split` called with a wrapper around `gini`, which makes it take its Python loop with identical arithmetic.
+- **Buffer size (demo CSV)**: the imputer pipeline with `max_depth=3` and 30-row chunks. Both buffers are scored on the same 140 rows, starting with the third chunk.
+- **Buffer size (synthetic stream)**: 10,000 rows in 100-row chunks with 5% label noise, where the target rule changes at row 5,000. A bare tree with `max_depth=6`; every buffer size is scored on the same rows, 2,001 to 10,000.
+- **Environment**: Linux VM, Python 3.10.12, NumPy 2.2.6. Predictions always come before training on each scored chunk.
 
-### Loop vs NumPy
+### Loop vs Vectorised
 
-| Implementation | Time |
-| :--- | ---: |
-| Python loop | 10.48 ms |
-| NumPy updates | 5.97 ms |
+| Operation | Size | Python loop | Vectorised | Speed-up |
+| :--- | ---: | ---: | ---: | ---: |
+| Confusion-matrix updates | 100 x 1,000 rows | 9.90 ms | 6.29 ms | **1.6x** |
+| Split search, one feature | 500 rows | 12.89 ms | 0.10 ms | **129x** |
+| Split search, one feature | 2,000 rows | 66.65 ms | 0.25 ms | **262x** |
+| Split search, one feature | 8,000 rows | 634.05 ms | 0.93 ms | **683x** |
+| Depth-5 tree fit, 5 features | 500 rows | 286.3 ms | 5.3 ms | **54x** |
+| Depth-5 tree fit, 5 features | 2,000 rows | 1,476.9 ms | 12.1 ms | **123x** |
 
-NumPy updates were approximately **1.76 times faster** in this run.
-
-### Buffer Size
+### Buffer Size: Demo CSV
 
 | Buffer size | Accuracy | Evaluated rows | Retrains | Mean retraining update time |
 | :--- | ---: | ---: | ---: | ---: |
-| 30 | 67.1% | 140 | 6 | 0.88 ms |
-| 60 | 69.3% | 140 | 3 | 1.36 ms |
+| 30 | 67.1% (94/140) | 140 | 6 | 0.95 ms |
+| 60 | 69.3% (97/140) | 140 | 3 | 0.90 ms |
 
-Timing covers the pipeline retraining update, including preprocessing. The larger buffer retrains less often but takes longer per retraining update in this run.
+### Buffer Size: Synthetic Stream with a Rule Change
 
-*Note: Timings vary with the environment and run. Notebook cumulative curves can cover different evaluation rows because the two buffers have different warm-up periods; use the benchmark's shared evaluation rows for the accuracy comparison. The original group benchmarks in [`benchmark/results.md`](benchmark/results.md) describe the earlier batch package and are separate from these streaming results.*
+| Buffer size | Accuracy | Retrains | Mean retraining update time |
+| :--- | ---: | ---: | ---: |
+| 100 | 83.3% | 100 | 2.19 ms |
+| 250 | 85.6% | 33 | 4.19 ms |
+| 500 | **86.6%** | 20 | 6.37 ms |
+| 1,000 | 85.8% | 10 | 8.76 ms |
+| 2,000 | 79.9% | 5 | 11.16 ms |
+
+Small buffers retrain on too little data, and very large buffers keep an outdated tree for longer after the rule changes, so a mid-sized buffer scored best. Retraining time grows with buffer size while the number of retrains falls.
+
+*Note: Timings vary with the environment and run; the accuracies are the same on every run. Notebook cumulative curves can cover different evaluation rows because the two buffers have different warm-up periods; use the benchmark's shared evaluation rows for the accuracy comparison. The original group benchmarks in [`benchmark/results.md`](benchmark/results.md) describe the earlier batch package and are separate from these streaming results.*
 
 ---
 
 ## 7. Testing & Quality Assurance
 
-Latest reported full-suite result: **339 tests passed**. This includes the inherited group tests and the streaming extension's tests.
+Latest full-suite result: **345 tests passed**. This includes the inherited group tests and the streaming extension's tests. `python -m pytest tests -q -k "test_stream_ or test_tree"` runs the 49 streaming and tree tests on their own.
 
 ```powershell
 python -m pytest tests -q
@@ -332,23 +346,24 @@ Statement coverage for `numcompute_stream`, measured using the full suite:
 | Module | Coverage |
 | :--- | ---: |
 | `metrics.py` | 91% |
-| `pipeline.py` | 80% |
+| `pipeline.py` | 83% |
 | `preprocessing.py` | 91% |
 | `stats.py` | 89% |
-| `stream.py` | 93% |
-| `tree.py` | 87% |
+| `stream.py` | 96% |
+| `tree.py` | 91% |
 | `visualise.py` | 100% |
-| **Streaming package total** | **89%** |
+| **Streaming package total** | **91%** |
 
 This percentage applies to the streaming package, not the whole repository. It measures executed statements, not branch coverage or proof of correctness.
 
 ### Edge Cases Covered
 
-- **Tree**: impurity calculations, split ties, constant features, depth limits, feature selection, invalid tree parameters and prediction order.
-- **Buffering**: retraining at the buffer limit, copies of buffered input, feature-count mismatches and `fit()` resets.
+- **Tree**: impurity calculations, split ties, constant features, depth limits, feature selection, invalid tree parameters (`TypeError` vs `ValueError`), prediction before training, prediction order, and the custom-impurity loop path matching vectorised Gini.
+- **Buffering**: retraining at the buffer limit, copies of buffered input, feature-count mismatches during buffering and after a retrain, and `fit()` resets.
 - **Preprocessing**: incremental statistics, tiny-scale values, missing values, custom missing-value sentinels and category expansion.
 - **Metrics**: cumulative and rolling metrics, unknown labels, AUC ties, NaN scores and reset.
-- **Pipeline & trainer**: synchronised preprocessing and tree updates, and scoring before each update.
+- **Pipeline & trainer**: synchronised preprocessing and tree updates, scoring before each update, a bare tree without a pipeline, and `score_chunk()` returning accuracy without training.
+- **Distances**: Euclidean distances near 1e200 and 1e-200 without overflow or underflow.
 - **Visualisation**: figure creation and saving.
 
 ---
@@ -372,7 +387,7 @@ The CSV contains 200 synthetic customer records. The training example uses age a
 
 ## 9. Assignment 1 Corrections
 
-Corrections on the individual branch address distance precision, standardisation at tiny scales, scaler range validation, compatibility with minimal external transformers and unnecessary quadratic finite-difference storage. Regression tests were added with those changes. The original group repository is separate from these fork-branch changes.
+Corrections on the individual branch address distance precision, standardisation at tiny scales, scaler range validation, compatibility with minimal external transformers and unnecessary quadratic finite-difference storage. Regression tests were added with those changes. Euclidean distances subtract coordinates directly for precision, and rows are processed in broadcast blocks of about one million differences, with each distance scaled by its largest coordinate difference so very large and very small values neither overflow nor underflow. The original group repository is separate from these fork-branch changes.
 
 ---
 
@@ -383,7 +398,8 @@ Corrections on the individual branch address distance precision, standardisation
 - Exact quantiles retain observations, and cumulative AUC retains labels and scores. Their memory usage grows with the stream; rolling AUC bounds its history.
 - Logged memory values cover chunk arrays and pending raw buffers, not total model or process memory.
 - The dataset is small and synthetic. Its accuracy does not establish performance on real customer data.
-- The video shows an earlier version. Later validation, vectorisation and plotting-test changes leave the demonstrated benchmark accuracies unchanged. Test counts and timings in the video describe the recorded version; the results above describe the later reported run.
+- The video shows an earlier version. Later validation, vectorisation, trainer and benchmark changes leave the demonstrated accuracies and plots unchanged. Test counts and timings in the video describe the recorded version; the results above describe the latest run.
+- The tree still loops over nodes and candidate features in Python, although each split search and routing step is vectorised. It returns class labels only, so the notebook's AUC example uses demonstration scores.
 
 ---
 
