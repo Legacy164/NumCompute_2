@@ -6,9 +6,9 @@ from numcompute_stream.preprocessing import Imputer, MinMaxScaler, OneHotEncoder
 from numcompute_stream.tree import DecisionTreeClassifier
 
 
-@pytest.mark.parametrize("buffer_size", [0, 1.5])
-def test_tree_rejects_invalid_buffer_size(buffer_size):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize("buffer_size,error", [(0, ValueError), (1.5, TypeError)])
+def test_tree_rejects_invalid_buffer_size(buffer_size, error):
+    with pytest.raises(error):
         DecisionTreeClassifier(buffer_size=buffer_size)
 
 

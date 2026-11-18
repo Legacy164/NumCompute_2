@@ -251,3 +251,7 @@ def test_to_2d_and_back_round_trip():
 def test_distance_preserves_small_difference_at_large_offset(metric, expected):
     result = pairwise_distances([[1e8, 1e8]], [[1e8 + 2, 1e8]], metric=metric)
     assert result[0, 0] == expected
+
+def test_euclidean_handles_very_large_and_very_small_values():
+    assert pairwise_distances([[1e200, 0.0], [-1e200, 0.0]])[0, 1] == 2e200
+    assert pairwise_distances([[1e-200, 0.0], [0.0, 0.0]])[0, 1] == 1e-200

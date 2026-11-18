@@ -1,5 +1,5 @@
 import numpy as np
-
+from numcompute.utils import NotFittedError
 def gini(y):
     if len(y) == 0:
         return 0.0
@@ -15,37 +15,100 @@ def entropy(y):
     p = counts / counts.sum()
     return float(-np.sum(p * np.log2(p)))
 
-def best_numeric_split(x,y,impurity=gini):
-    x=np.array(x)
-    y=np.array(y)
+def best_numeric_split(x, y, impurity=gini):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y)
 
-    values=np.unique(x)
-    if len(values)<2:
+    if x.ndim != 1 or y.ndim != 1 or x.shape != y.shape:
+        raise ValueError("x and y must be matching 1-D arrays")
+    if not np.isfinite(x).all():
+        raise ValueError("x must contain only finite values")
+
+    order = np.argsort(x, kind="stable")
+    sorted_x = x[order]
+    boundaries = np.flatnonzero(sorted_x[:-1] < sorted_x[1:])
+
+    if boundaries.size == 0:
         return None
 
-    lower, upper = values[:-1], values[1:]
+    lower = sorted_x[boundaries]
+    upper = sorted_x[boundaries + 1]
     thresholds = lower / 2.0 + upper / 2.0
-    thresholds = np.where((thresholds < lower) | (thresholds >= upper), lower, thresholds)
-    n=len(y)
-    best=None
-    for t in thresholds:
-        mask=x<=t
-        left, right=y[mask],y[~mask]
-        score=(len(left)*impurity(left)+len(right)*impurity(right))/n
-        if best is None or score<best[1]:
-            best=(float(t),float(score))
-    return best
+    thresholds = np.where(
+        (thresholds < lower) | (thresholds >= upper),
+        lower,
+        thresholds,
+    )
+
+    n = len(y)
+
+    if impurity is not gini and impurity is not entropy:
+        scores = []
+        for threshold in thresholds:
+            mask = x <= threshold
+            left, right = y[mask], y[~mask]
+            scores.append(
+                (len(left) * impurity(left)
+                 + len(right) * impurity(right)) / n
+            )
+    else:
+        labels, encoded = np.unique(y[order], return_inverse=True)
+        counts = np.zeros((n, len(labels)), dtype=np.int64)
+        counts[np.arange(n), encoded] = 1
+        counts = np.cumsum(counts, axis=0)
+
+        left_counts = counts[boundaries]
+        right_counts = counts[-1] - left_counts
+        left_size = boundaries + 1
+        right_size = n - left_size
+
+        def impurities(class_counts, size):
+            p = class_counts / size[:, None]
+
+            if impurity is gini:
+                return 1.0 - np.sum(p ** 2, axis=1)
+
+            log_p = np.zeros_like(p)
+            np.log2(p, out=log_p, where=p > 0)
+            return -np.sum(p * log_p, axis=1)
+
+        scores = (
+            left_size * impurities(left_counts, left_size)
+            + right_size * impurities(right_counts, right_size)
+        ) / n
+
+    best = int(np.argmin(scores))
+    return float(thresholds[best]), float(scores[best])
+
+def _check_int(value, name, minimum, allow_none=False):
+    """Raise TypeError for a non-integer and ValueError below the minimum."""
+    if value is None and allow_none:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}")
 
 class DecisionTreeClassifier:
-    def __init__(self, max_depth=None, min_samples_split=2, impurity=gini, buffer_size=500, max_features=None, random_state=None):
+    """Depth-limited Gini/entropy tree; partial_fit retrains every buffer_size rows."""
+
+    def __init__(self, max_depth=None, min_samples_split=2, impurity=gini,
+                 buffer_size=500, max_features=None, random_state=None):
+        """Validate and store the hyperparameters."""
+        _check_int(max_depth, "max_depth", 0, allow_none=True)
+        _check_int(min_samples_split, "min_samples_split", 2)
+        _check_int(buffer_size, "buffer_size", 1)
+        _check_int(max_features, "max_features", 1, allow_none=True)
+        if not callable(impurity):
+            raise TypeError("impurity must be a function such as gini or entropy")
+
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.impurity = impurity
-        self.root_ = None
-        if isinstance(buffer_size, bool) or not isinstance(buffer_size, (int, np.integer)) or buffer_size < 1:
-            raise ValueError("buffer_size must be a positive integer")
-
         self.buffer_size = buffer_size
+        self.max_features = max_features
+        self.random_state = random_state
+        self.root_ = None
         self._chunks = []
         self._buffered_rows = 0
         if max_features is not None and (
@@ -127,7 +190,7 @@ class DecisionTreeClassifier:
             if best_score is None or score < best_score:
                 best_feature, best_threshold, best_score = feature, threshold, score
 
-        if best_score is None or best_score >= self.impurity(y):
+        if best_score is None or best_score >= self.impurity(y) - 1e-12:
             return leaf
 
         mask = X[:, best_feature] <= best_threshold
@@ -141,20 +204,39 @@ class DecisionTreeClassifier:
 
     def predict(self, X):
         if self.root_ is None:
-            raise ValueError("Call fit before predict")
+            raise NotFittedError("Call fit or partial_fit before predict")
 
         X = np.asarray(X, dtype=float)
+
         if X.ndim != 2 or X.shape[1] != self.n_features_in_:
-            raise ValueError(f"X must be 2-D with {self.n_features_in_} features")
+            raise ValueError(
+                f"X must be 2-D with {self.n_features_in_} features"
+            )
         if not np.isfinite(X).all():
             raise ValueError("X must contain only finite values")
-        predictions = []
-        for row in X:
-            node = self.root_
-            while not node["leaf"]:
-                if row[node["feature"]] <= node["threshold"]:
-                    node = node["left"]
-                else:
-                    node = node["right"]
-            predictions.append(node["label"])
-        return np.array(predictions)
+        if len(X) == 0:
+            return np.empty(0)
+
+        pending = [(self.root_, np.arange(len(X)))]
+        leaves = []
+
+        while pending:
+            node, rows = pending.pop()
+
+            if rows.size == 0:
+                continue
+
+            if node["leaf"]:
+                leaves.append((rows, node["label"]))
+            else:
+                mask = X[rows, node["feature"]] <= node["threshold"]
+                pending.append((node["right"], rows[~mask]))
+                pending.append((node["left"], rows[mask]))
+
+        dtype = np.asarray([label for _, label in leaves]).dtype
+        predictions = np.empty(len(X), dtype=dtype)
+
+        for rows, label in leaves:
+            predictions[rows] = label
+
+        return predictions

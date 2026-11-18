@@ -1,3 +1,4 @@
+import pytest
 from numcompute_stream.pipeline import Pipeline
 from numcompute_stream.preprocessing import OneHotEncoder
 from numcompute_stream.tree import DecisionTreeClassifier
@@ -21,3 +22,10 @@ def test_pipeline_updates_encoder_and_tree_together():
         "x0_amber", "x0_blue", "x0_red"
     ]
     assert pipe.predict([["amber"], ["red"]]).tolist() == [1, 0]
+
+def test_pipeline_rejects_new_feature_count_after_retrain():
+    pipe = Pipeline([("tree", DecisionTreeClassifier(buffer_size=2))])
+    pipe.partial_fit([[0.0], [1.0]], [0, 1])
+
+    with pytest.raises(ValueError):
+        pipe.partial_fit([[0.0, 1.0]], [0])

@@ -608,9 +608,11 @@ def pairwise_distances(X, Y=None, metric: str = "euclidean") -> np.ndarray:
 
     Notes
     -----
-    Euclidean uses ``|x|^2 + |y|^2 - 2 x.y`` (BLAS, fast) and clips tiny
-    negatives caused by rounding. Time O(n m d), space O(n m) for euclidean/
-    cosine; manhattan and chebyshev build an O(n m d) intermediate.
+    Euclidean distances subtract coordinates directly, which keeps small
+    differences between large values. Rows of ``X`` are handled in blocks so
+    each ``(block, m, d)`` difference array stays near one million values.
+    Time O(n m d), space O(n m) plus one block; manhattan and chebyshev build
+    an O(n m d) intermediate.
     """
     if metric not in _METRICS:
         raise ValueError(f"metric must be one of {_METRICS}, got {metric!r}")
@@ -624,13 +626,17 @@ def pairwise_distances(X, Y=None, metric: str = "euclidean") -> np.ndarray:
         )
     if metric in ("euclidean", "sqeuclidean"):
         distances = np.empty((len(A), len(B)))
+        block = max(1, 1_000_000 // max(1, len(B) * A.shape[1]))
 
-        for i, point in enumerate(A):
-            delta = point - B
+        for start in range(0, len(A), block):
+            rows = slice(start, start + block)
+            delta = A[rows, None, :] - B[None, :, :]
             if metric == "euclidean":
-                distances[i] = np.hypot.reduce(delta, axis=1, initial=0.0)
+                scale = np.max(np.abs(delta), axis=2, keepdims=True)
+                scale = np.where(scale > 0, scale, 1.0)
+                distances[rows] = np.sqrt(np.sum((delta / scale) ** 2, axis=2)) * scale[..., 0]
             else:
-                distances[i] = np.sum(delta ** 2, axis=1)
+                distances[rows] = np.sum(delta ** 2, axis=2)
 
         if Y is None:
             np.fill_diagonal(distances, 0.0)
